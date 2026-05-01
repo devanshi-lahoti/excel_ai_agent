@@ -30,34 +30,49 @@ class ExcelAutomator:
         excel_path = excel_path.strip().strip('"').strip("'")
         logging.info("Launching Excel from path: %s", excel_path)
         self.app = Application(backend="uia").start(excel_path)
-        self.window = self.app.window(best_match="Excel")
+        time.sleep(2.0)
+        self.app.top_window().type_keys("{ESC}")
+        self.window = self.app.window(title_re=".*Excel.*")
         self.window.wait("visible", timeout=timeout)
-        self.window.set_focus()
+        self._refresh_focus()
         time.sleep(1.0)
 
     def create_blank_workbook(self) -> None:
         self._ensure_window()
-        logging.info("Creating a blank workbook (Alt+F, N, L)...")
-        self.window.type_keys("%F", set_foreground=True)
-        time.sleep(0.5)
-        self.window.type_keys("N")
-        time.sleep(0.5)
-        self.window.type_keys("L")
+        self._refresh_focus()
+        logging.info("Creating a blank workbook (Ctrl+N)...")
+        self.window.type_keys("^n", set_foreground=True)
         time.sleep(1.2)
+        self._refresh_focus()
+        self._exit_backstage_if_open()
+        if not self._is_workbook_open():
+            logging.info("Workbook not active after Ctrl+N. Retrying once.")
+            self._refresh_focus()
+            self.window.type_keys("^n", set_foreground=True)
+            time.sleep(1.2)
+            self._refresh_focus()
+            self._exit_backstage_if_open()
+            if not self._is_workbook_open():
+                raise RuntimeError("Workbook did not open. Excel is still on Start/Home or blocked UI.")
 
     def paste_data(self, dataframe: pd.DataFrame) -> None:
         self._ensure_window()
+        self._refresh_focus()
+        self._exit_backstage_if_open()
         logging.info("Pasting dataframe into workbook...")
         tab_data = dataframe.to_csv(index=False, sep="\t")
         pyperclip.copy(tab_data)
-        self.window.set_focus()
+        self.focus_workbook_surface()
+        self.window.type_keys("^{HOME}", set_foreground=True)
+        time.sleep(0.3)
         self.window.type_keys("^v", set_foreground=True)
         time.sleep(1.0)
 
     def apply_filters(self) -> None:
         self._ensure_window()
+        self._refresh_focus()
+        self._exit_backstage_if_open()
         logging.info("Applying filters (Ctrl+Shift+L)...")
-        self.window.set_focus()
         self.window.type_keys("^a", set_foreground=True)
         time.sleep(0.3)
         self.window.type_keys("^+l")
@@ -65,18 +80,32 @@ class ExcelAutomator:
 
     def press_keys(self, keys: str) -> None:
         self._ensure_window()
+        self._refresh_focus()
         logging.info("Pressing keys: %s", keys)
-        self.window.set_focus()
         self.window.type_keys(keys, set_foreground=True)
         time.sleep(0.6)
 
     def click_text(self, text: str, timeout: int = 3) -> None:
         self._ensure_window()
+        self._refresh_focus()
         logging.info("Trying to click control with text: %s", text)
         btn = self.window.child_window(title=text, control_type="Button")
         btn.wait("exists enabled visible", timeout=timeout)
         btn.click_input()
         time.sleep(0.8)
+
+    def focus_workbook_surface(self) -> None:
+        self._ensure_window()
+        self._refresh_focus()
+        try:
+            rect = self.window.rectangle()
+            target_x = int(rect.width() * 0.35)
+            target_y = int(rect.height() * 0.35)
+            self.window.click_input(coords=(target_x, target_y))
+        except Exception:
+            # Fallback to focus only when click coordinates are not available.
+            self.window.set_focus()
+        time.sleep(0.2)
 
     def wait(self, seconds: float) -> None:
         logging.info("Waiting for %.2f seconds", seconds)
@@ -97,3 +126,36 @@ class ExcelAutomator:
     def _ensure_window(self) -> None:
         if self.window is None:
             raise ElementNotFoundError("Excel window not initialized. Call launch_excel() first.")
+
+    def _refresh_focus(self) -> None:
+        self._ensure_window()
+        try:
+            self.window = self.app.top_window()
+        except Exception:
+            self.window = self.app.window(title_re=".*Excel.*")
+        self.window.set_focus()
+
+    def _is_workbook_open(self) -> bool:
+        title = (self.window.window_text() or "").strip().lower()
+        if not title:
+            return False
+        if "start" in title or "home" in title:
+            return False
+        return "excel" in title
+
+    def _exit_backstage_if_open(self) -> None:
+        try:
+            if self.window.child_window(title="Home", control_type="Text").exists(timeout=0.3):
+                logging.info("Backstage/Home detected. Sending Esc to return to worksheet.")
+                self.window.type_keys("{ESC}", set_foreground=True)
+                time.sleep(0.8)
+                self._refresh_focus()
+                return
+            if self.window.child_window(title_re="Good .*", control_type="Text").exists(timeout=0.3):
+                logging.info("Backstage greeting detected. Sending Esc to return to worksheet.")
+                self.window.type_keys("{ESC}", set_foreground=True)
+                time.sleep(0.8)
+                self._refresh_focus()
+        except Exception:
+            # If detection is inconclusive, continue without blocking flow.
+            pass

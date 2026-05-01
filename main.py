@@ -14,6 +14,7 @@ from core.vision import encode_image_to_data_url
 BASE_DIR = Path(__file__).resolve().parent
 LOGS_DIR = BASE_DIR / "logs"
 DATA_DIR = BASE_DIR / "data"
+AUTH_BLOCK_TOKENS = ("sign in", "signin", "login", "log in", "activate", "activation", "account")
 
 
 def setup_logging() -> None:
@@ -55,8 +56,33 @@ def execute_step(automator: ExcelAutomator, step: Dict[str, Any], dataframe: pd.
         automator.click_text(text)
     elif action == "wait":
         automator.wait(float(args.get("seconds", 1)))
+    elif action == "focus_workbook_surface":
+        automator.focus_workbook_surface()
     else:
         raise ValueError(f"Unsupported action: {action}")
+
+
+def _contains_auth_intent(value: str) -> bool:
+    normalized = value.lower()
+    return any(token in normalized for token in AUTH_BLOCK_TOKENS)
+
+
+def _is_forbidden_auth_fix(step: Dict[str, Any]) -> bool:
+    action = str(step.get("action", "")).lower()
+    args = step.get("args", {}) or {}
+    reason = str(step.get("reason", ""))
+    text_arg = str(args.get("text", ""))
+    keys_arg = str(args.get("keys", ""))
+    combined = " ".join([action, text_arg, keys_arg, reason])
+    return _contains_auth_intent(combined)
+
+
+def _safe_recovery_chain() -> List[Dict[str, Any]]:
+    return [
+        {"action": "press_keys", "args": {"keys": "{ESC}"}, "reason": "Dismiss blocking popup"},
+        {"action": "focus_workbook_surface", "args": {}, "reason": "Refocus workbook grid"},
+        {"action": "press_keys", "args": {"keys": "^{HOME}"}, "reason": "Move to A1"},
+    ]
 
 
 def recover_and_retry(
@@ -82,12 +108,27 @@ def recover_and_retry(
         return False
 
     fix_step = fixes[0]
-    logging.info("Applying recovery step: %s", fix_step)
-    execute_step(automator, fix_step, dataframe)
+    if _is_forbidden_auth_fix(fix_step):
+        logging.warning("Blocked auth-related recovery action from LLM: %s", fix_step)
+        fix_sequence = _safe_recovery_chain()
+    else:
+        fix_sequence = [fix_step]
+
+    for safe_step in fix_sequence:
+        logging.info("Applying recovery step: %s", safe_step)
+        execute_step(automator, safe_step, dataframe)
 
     logging.info("Retrying original failed step after recovery...")
-    execute_step(automator, failed_step, dataframe)
-    return True
+    try:
+        execute_step(automator, failed_step, dataframe)
+        return True
+    except Exception as retry_error:
+        logging.warning("Retry after LLM recovery failed: %s. Applying deterministic fallback chain.", retry_error)
+        for safe_step in _safe_recovery_chain():
+            logging.info("Applying deterministic fallback step: %s", safe_step)
+            execute_step(automator, safe_step, dataframe)
+        execute_step(automator, failed_step, dataframe)
+        return True
 
 
 def run_agent() -> None:

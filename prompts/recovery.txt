@@ -7,7 +7,8 @@ A pywinauto action failed. Analyze the screenshot and return ONLY one JSON objec
 }
 
 Guidelines:
-- Prefer safe actions first: press Esc, close popup, retry.
-- If security warning/popup exists, choose click_text or press_keys.
+- Do not suggest any authentication actions: Sign in, Login, Activate, Account.
+- Prefer safe actions first: press Esc, focus workbook, Ctrl+Home, retry.
+- If popup exists, prefer press_keys over clicking authentication prompts.
 - If no clear action, return retry.
 - Return valid JSON only.
