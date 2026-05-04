@@ -15,6 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent
 LOGS_DIR = BASE_DIR / "logs"
 DATA_DIR = BASE_DIR / "data"
 AUTH_BLOCK_TOKENS = ("sign in", "signin", "login", "log in", "activate", "activation", "account")
+PLANNER_ALLOWED_ACTIONS = {"launch_excel", "create_blank_workbook", "paste_data", "apply_filters"}
 
 
 def setup_logging() -> None:
@@ -33,7 +34,7 @@ def setup_logging() -> None:
 def build_user_goal() -> str:
     return (
         "Open Excel, create a blank workbook, paste sample_data.csv into Sheet1, "
-        "and apply filters on the pasted range."
+        "apply a filter to the pasted range, then in the 'subject' column select only 'Mathematics'."
     )
 
 
@@ -48,7 +49,7 @@ def execute_step(automator: ExcelAutomator, step: Dict[str, Any], dataframe: pd.
     elif action == "paste_data":
         automator.paste_data(dataframe)
     elif action == "apply_filters":
-        automator.apply_filters()
+        automator.apply_filters(dataframe)
     elif action == "press_keys":
         automator.press_keys(args.get("keys", "{ESC}"))
     elif action == "click_text":
@@ -60,6 +61,17 @@ def execute_step(automator: ExcelAutomator, step: Dict[str, Any], dataframe: pd.
         automator.focus_workbook_surface()
     else:
         raise ValueError(f"Unsupported action: {action}")
+
+
+def _sanitize_planner_steps(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    sanitized: List[Dict[str, Any]] = []
+    for step in steps:
+        action = str(step.get("action", "")).strip()
+        if action in PLANNER_ALLOWED_ACTIONS:
+            sanitized.append(step)
+        else:
+            logging.warning("Ignoring non-deterministic planner action: %s", step)
+    return sanitized
 
 
 def _contains_auth_intent(value: str) -> bool:
@@ -148,7 +160,7 @@ def run_agent() -> None:
         f"User request: {user_goal}"
     )
 
-    steps = get_ai_decision(planning_prompt)
+    steps = _sanitize_planner_steps(get_ai_decision(planning_prompt))
     logging.info("Planned %d step(s)", len(steps))
 
     for idx, step in enumerate(steps, start=1):

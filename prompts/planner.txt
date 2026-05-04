@@ -2,7 +2,7 @@
 Return ONLY a JSON array of steps.
 Each step object must follow this schema:
 {
-  "action": "launch_excel|create_blank_workbook|paste_data|apply_filters|press_keys|click_text|wait",
+  "action": "launch_excel|create_blank_workbook|paste_data|apply_filters",
   "args": {"...": "..."},
   "reason": "short reason"
 }
@@ -11,4 +11,13 @@ Rules:
 1) Keep steps deterministic and minimal.
 2) Prefer toolbox actions: launch_excel, create_blank_workbook, paste_data, apply_filters.
 3) If user asks generic task, still start with launch_excel.
-4) No markdown, no prose, no code fences, only valid JSON.
+4) Planner must output high-level intent only. Do NOT emit low-level keyboard/mouse actions.
+5) Never output: press_keys, click_text, wait, focus_workbook_surface.
+6) If the user asks to filter a specific column to a specific value, DO NOT add manual key steps.
+   Instead include apply_filters only; the automator handles deterministic keyboard sequence internally.
+7) No markdown, no prose, no code fences, only valid JSON.
+
+Output quality checks before finalizing JSON:
+- The final state must satisfy the user condition exactly (not just "filters enabled").
+- Avoid vague steps like "configure filter" without concrete action arguments.
+- Do not include low-level navigation commands (keyboard or mouse) in planner output.
